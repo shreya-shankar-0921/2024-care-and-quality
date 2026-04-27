@@ -1,7 +1,7 @@
 # 2024 Medicaid Core Set Quality Measures: State-Level Analysis
 
 
-**View the Interactive HTML Report Here:** [[Link to your GitHub Pages URL]](https://[YOUR-GITHUB-USERNAME].github.io/[YOUR-REPO-NAME]/)
+[[**View the Interactive HTML Report Here:**]](https://shreya-shankar-0921.github.io/2024-care-and-quality/)
 
 
 ## Project Overview
@@ -37,7 +37,7 @@ This project was built entirely in **R** and compiled using **R Markdown** to en
 
 ```text
 ├── data/
-│   └── 2024-health-quality-measures.csv  # Raw CMS dataset (Ensure this is in your repo)
+│   └── 2024-health-quality-measures.csv  # Raw CMS dataset 
 ├── index.Rmd                             # The core analytical script and markdown narrative
 ├── index.html                            # The compiled report hosted via GitHub Pages
 └── README.md                             # Project documentation
