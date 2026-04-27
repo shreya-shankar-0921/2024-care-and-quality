@@ -1,0 +1,306 @@
+---
+title: "2024 Medicaid Core Set Quality Measures: State-Level Analysis"
+author: "Shreya Shankar"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+# Configure chunk options
+knitr::opts_chunk$set(
+  echo = TRUE, 
+  warning = FALSE, 
+  message = FALSE, 
+  fig.width = 10, 
+  fig.height = 7,
+  dpi = 300
+)
+
+# Load required libraries
+library(tidyverse)
+library(ggrepel)
+library(scales)
+library(knitr)
+
+# Define Color Palette
+math_colors <- c(
+  dark_blue   = "#003E51",
+  bright_blue = "#00A5D9",
+  teal        = "#008477",
+  light_blue  = "#D6EBF2",
+  light_grey  = "#F1F2F2",
+  orange      = "#E35205",
+  coral       = "#FF8E61",
+  magenta     = "#E10050",
+  light_pink  = "#F6C7D1",
+  purple      = "#7D305F"
+)
+
+# Custom plot theme for consistency
+theme_math <- function() {
+  theme_minimal(base_family = "sans") +
+    theme(
+      plot.title = element_text(face = "bold", size = 16, color = math_colors["dark_blue"], margin = margin(b = 10)),
+      plot.subtitle = element_text(size = 12, color = "gray40", margin = margin(b = 20)),
+      axis.title = element_text(face = "bold", color = math_colors["dark_blue"]),
+      panel.grid.minor = element_blank(),
+      strip.text = element_text(face = "bold", size = 12, color = "white"),
+      strip.background = element_rect(fill = math_colors["dark_blue"])
+    )
+}
+```
+
+# Executive Summary
+
+This report provides a comprehensive evaluation of the 2024 Child and Adult Health Care Quality Measures dataset across 52 reporting jurisdictions. By standardizing performance across 57 unique measures, this analysis reveals significant structural variations in state-level Medicaid administration. 
+
+**Key Findings:**
+
+1. **The Transparency Deficit:** Approximately 10% of reported values are suppressed. Critical behavioral health metrics, notably Depression Screening, suffer from universal "Not Publicly Reported" statuses, acting as black holes in care oversight.
+
+2. **Geographic Inequity:** Standardized composite scoring reveals a stark geographic divide, with the Northeast significantly outperforming the South in overall care quality delivery.
+
+3. **The Pediatric/Adult Chasm:** Structural advantages exist for pediatric care across nearly all states. Child follow-up rates post-mental health hospitalization outpace adult rates by an average of 12 percentage points, with extreme bifurcation in specific states like New York.
+
+4. **Extreme Variance in SUD Care:** Measures relating to Substance Use Disorder (SUD) and Opioid Use Disorder (OUD) exhibit the most volatile state-to-state variance, ranging from 0.3% to 89.6%.
+
+--------------------------------------------------------------------------------
+
+# Methodology & Data Infrastructure
+
+To ensure analytical rigor, observations were filtered to the canonical `Rate Used in Calculating State Mean and Median = Yes` subset (n = 6,417 observations). Missingness and suppression codes (`DS`, `NR`, `NPR`, `#`) were not discarded; rather, they were quantified as a critical signal of "reporting completeness."
+
+```{r data_prep, include=FALSE}
+# State to Region Mapping
+regions <- data.frame(
+  State = c("Connecticut", "Maine", "Massachusetts", "New Hampshire", "Rhode Island", "Vermont", "New Jersey", "New York", "Pennsylvania", "Illinois", "Indiana", "Michigan", "Ohio", "Wisconsin", "Iowa", "Kansas", "Minnesota", "Missouri", "Nebraska", "North Dakota", "South Dakota", "Delaware", "Florida", "Georgia", "Maryland", "North Carolina", "South Carolina", "Virginia", "District of Columbia", "West Virginia", "Alabama", "Kentucky", "Mississippi", "Tennessee", "Arkansas", "Louisiana", "Oklahoma", "Texas", "Arizona", "Colorado", "Idaho", "Montana", "Nevada", "New Mexico", "Utah", "Wyoming", "Alaska", "California", "Hawaii", "Oregon", "Washington", "Puerto Rico"),
+  Region = c(rep("Northeast", 9), rep("Midwest", 12), rep("South", 17), rep("West", 13), "Territory")
+)
+
+# Load and clean data
+df <- read_csv("data/2024-health-quality-measures.csv")
+
+df_clean <- df %>%
+  filter(`Rate Used in Calculating State Mean and Median` == "Yes") %>%
+  mutate(
+    # 1. Force the rate to numeric. Any non-numeric string automatically becomes NA.
+    State_Rate_Numeric = suppressWarnings(as.numeric(str_trim(`State Rate`))),
+    
+    # 2. It is strictly "Reported" only if it successfully became a valid number.
+    Is_Reported = !is.na(State_Rate_Numeric)
+  ) %>%
+  left_join(regions, by = "State")
+
+# Calculate Z-scores
+df_z <- df_clean %>%
+  filter(Is_Reported) %>%
+  group_by(`Measure Name`) %>%
+  filter(n() > 10) %>% 
+  mutate(
+    Z_Score = as.numeric(scale(State_Rate_Numeric))
+  ) %>%
+  ungroup()
+
+```
+
+--------------------------------------------------------------------------------
+
+## Domain Overview
+
+The dataset spans multiple domains of care. As shown in the descriptive table below, Behavioral Health Care makes up the largest volume of metrics, though reporting completeness varies widely.
+
+```{r domain_table}
+domain_summary <- df_clean %>%
+  group_by(Domain) %>%
+  summarize(
+    `Total Observations` = n(),
+    `Unique Measures` = n_distinct(`Measure Name`),
+    `Avg. Reporting Completeness` = paste0(round(mean(Is_Reported) * 100, 1), "%")
+  ) %>%
+  arrange(desc(`Total Observations`))
+
+kable(domain_summary, format = "html", table.attr = "class='table table-striped table-hover'", caption = "Table 1: Summary of Quality Measures by Clinical Domain")
+```
+
+--------------------------------------------------------------------------------
+
+# The Landscape of Data Transparency
+
+Reporting completeness is a quality signal in its own right. While overall reporting is robust, specific measures remain systemic "black holes." Most notably, **Depression Screening** was reported by 42 states for children and 44 for adults, but returned "NPR" (Not Publicly Reported) in every single instance. Furthermore, **Smoking Cessation** records the lowest overall reporting completeness, with only 36 of 52 jurisdictions providing data.
+
+```{r reporting_completeness, fig.height=8}
+# 1. Bulletproof Math: Run against the raw `df` and count UNIQUE states
+completeness <- df %>%
+  # Force non-numeric strings to NA to easily separate numbers from suppression codes
+  mutate(State_Rate_Numeric = suppressWarnings(as.numeric(str_trim(`State Rate`)))) %>%
+  group_by(`Measure Name`) %>%
+  summarize(
+    # Count how many unique jurisdictions submitted at least one valid number
+    States_Reporting = n_distinct(State[!is.na(State_Rate_Numeric)]),
+    Percent_Reported = (States_Reporting / 52) * 100,
+    .groups = "drop"
+  ) %>%
+  arrange(Percent_Reported)
+
+# 2. Extract Top 10 and Bottom 10
+plot_data <- bind_rows(
+  head(completeness, 10) %>% mutate(Tier = "Bottom 10"),
+  tail(completeness, 10) %>% mutate(Tier = "Top 10")
+) %>%
+  mutate(
+    # Wrap text so long measure names don't crowd the axis
+    `Measure Name` = fct_reorder(str_wrap(`Measure Name`, 45), Percent_Reported),
+    # Hardcode Mathematica hex colors to prevent ggplot mapping bugs
+    color_flag = ifelse(Tier == "Bottom 10", "#E35205", "#008477")
+  )
+
+# 3. Build the Lollipop Chart
+ggplot(plot_data, aes(x = Percent_Reported, y = `Measure Name`)) +
+  # Draw the horizontal line
+  geom_segment(aes(x = 0, xend = Percent_Reported, y = `Measure Name`, yend = `Measure Name`), color = "gray80", size = 1) +
+  # Draw the point
+  geom_point(aes(color = color_flag), size = 4) +
+  scale_color_identity() +
+  # Add exact percentage labels next to the points
+  geom_text(aes(label = paste0(round(Percent_Reported, 1), "%"), x = Percent_Reported + 3), hjust = 0, size = 3.5, color = "gray30", fontface = "bold") +
+  scale_x_continuous(limits = c(0, 115), breaks = seq(0, 100, 25)) +
+  labs(
+    title = "The Transparency Gap in Medicaid Reporting",
+    subtitle = "Comparing the 10 most and least consistently reported quality measures",
+    x = "Percentage of Jurisdictions Reporting Numeric Rates (%)",
+    y = NULL
+  ) +
+  theme_math() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    axis.text.y = element_text(size = 9, lineheight = 0.9)
+  )
+```
+
+--------------------------------------------------------------------------------
+
+# Geographic Disparities: Standardized Performance
+
+To evaluate overall state performance across all metrics, we calculated a Z-score for every numeric state rate (mean = 0, standard deviation = 1). We then generated a **Composite Performance Score** by averaging these Z-scores for each state. 
+
+Aggregating these composite scores by US Census Region reveals a distinct geographic reality: the Northeast consistently outperforms the national average, while the South lags behind.
+
+```{r regional_boxplot}
+state_composites <- df_z %>%
+  group_by(State, Region) %>%
+  summarize(
+    Composite_Score = mean(Z_Score, na.rm = TRUE),
+    Measures_Reported = n(),
+    .groups = "drop"
+  ) %>%
+  filter(Region != "Territory") # Filter out PR for regional mainland comparison
+
+ggplot(state_composites, aes(x = reorder(Region, Composite_Score, FUN = median), y = Composite_Score)) +
+  geom_hline(yintercept = 0, color = math_colors["orange"], linetype = "dashed", size = 1) +
+  geom_boxplot(fill = math_colors["light_blue"], color = math_colors["dark_blue"], outlier.shape = NA) +
+  geom_jitter(color = math_colors["teal"], size = 3, alpha = 0.7, width = 0.15) +
+  annotate("text", x = 1, y = 0.1, label = "National Mean", color = math_colors["orange"], fontface = "italic") +
+  labs(
+    title = "Regional Medicaid Performance (Composite Z-Scores)",
+    subtitle = "Northeast states cluster above the national mean; Southern states show lowest median performance.",
+    x = "US Census Region",
+    y = "Average Standardized Score (Z-Score)"
+  ) +
+  theme_math()
+```
+
+> **Analytical Note:** The Northeast composite standard deviation sits at +0.47, driven by high performers like Vermont and New Hampshire. Conversely, the South averages -0.12, dragged down by trailing performance in states such as Oklahoma and Texas.
+
+--------------------------------------------------------------------------------
+
+# Extreme Volatility in SUD and OUD Care
+
+While some primary care metrics show tight national clustering, behavioral health and substance use metrics represent the "wild west" of Medicaid quality. 
+
+**Substance Use ED Follow-up** exhibits the largest range in the entire dataset (a 66.7 percentage point gap between the highest and lowest performing states). Similarly, **Pharmacotherapy for Opioid Use Disorder (OUD-AD)** varies wildly from 0.3% to 89.6%.
+
+```{r caterpillar_oud, fig.height=8}
+oud_df <- df_clean %>%
+  filter(`Measure Abbreviation` == "OUD-AD") %>%
+  drop_na(State_Rate_Numeric) %>%
+  mutate(State = fct_reorder(State, State_Rate_Numeric))
+
+national_mean <- mean(oud_df$State_Rate_Numeric, na.rm = TRUE)
+
+ggplot(oud_df, aes(x = State_Rate_Numeric, y = State)) +
+  geom_segment(aes(x = 0, xend = State_Rate_Numeric, y = State, yend = State), color = math_colors["light_blue"], size=1) +
+  geom_point(color = math_colors["bright_blue"], size = 3.5) +
+  geom_vline(xintercept = national_mean, color = math_colors["orange"], linetype = "dashed", size = 1) +
+  annotate("label", x = national_mean + 2, y = 5, label = paste0("National Avg: ", round(national_mean, 1), "%"), color = "white", fill=math_colors["orange"], fontface = "bold", hjust = 0) +
+  labs(
+    title = "Pharmacotherapy for Opioid Use Disorder (OUD-AD)",
+    subtitle = "Extreme state-to-state variance highlights inconsistent implementation of OUD interventions.",
+    x = "State Rate (%)",
+    y = NULL
+  ) +
+  scale_x_continuous(limits = c(0, 100), breaks = seq(0, 100, 20)) +
+  theme_math()
+```
+
+
+--------------------------------------------------------------------------------
+
+# Structural Disparities: Adult vs. Child Care Pathways
+
+A direct comparison of paired measures—specifically *Follow-Up After Hospitalization for Mental Illness (FUH)*—uncovers a systemic advantage for pediatric care. 
+
+Across the US, the child follow-up rate exceeds the adult rate by approximately 12 percentage points (r = 0.85). However, specific states highlight severe bifurcations in care administration. **New York**, for example, demonstrates a 25.7 percentage point advantage for children, suggesting highly siloed pediatric and adult Medicaid infrastructures.
+
+```{r fuh_scatter, fig.width=8, fig.height=8}
+fuh_data <- df_clean %>%
+  filter(`Measure Abbreviation` %in% c("FUH-CH", "FUH-AD")) %>%
+  select(State, `Measure Abbreviation`, State_Rate_Numeric) %>%
+  group_by(State, `Measure Abbreviation`) %>%
+  summarize(State_Rate_Numeric = mean(State_Rate_Numeric, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(names_from = `Measure Abbreviation`, values_from = State_Rate_Numeric) %>%
+  drop_na(`FUH-CH`, `FUH-AD`)
+
+max_val <- max(c(max(fuh_data$`FUH-CH`, na.rm = TRUE), max(fuh_data$`FUH-AD`, na.rm = TRUE)))
+
+ggplot(fuh_data, aes(x = `FUH-AD`, y = `FUH-CH`)) +
+  geom_abline(intercept = 0, slope = 1, color = math_colors["dark_blue"], linetype = "dashed", size = 0.8) +
+  geom_point(color = math_colors["teal"], size = 3.5, alpha = 0.8) +
+  geom_text_repel(
+    data = filter(fuh_data, State == "New York"),
+    aes(label = State),
+    color = math_colors["magenta"],
+    fontface = "bold",
+    nudge_y = 6,
+    nudge_x = -8,
+    segment.color = math_colors["magenta"],
+    size = 4.5
+  ) +
+  annotate("text", x = 15, y = max_val - 5, label = "Stronger Child Performance", color = math_colors["dark_blue"], angle = 45, fontface="italic") +
+  annotate("text", x = max_val - 15, y = 15, label = "Stronger Adult Performance", color = math_colors["dark_blue"], angle = 45, fontface="italic") +
+  coord_fixed(xlim = c(0, max_val + 5), ylim = c(0, max_val + 5)) +
+  labs(
+    title = "Mental Health Follow-Up: Adult vs. Child",
+    subtitle = "Points above the line indicate states where child follow-up rates outpace adults.",
+    x = "Adult Follow-Up Rate (%)",
+    y = "Child Follow-Up Rate (%)"
+  ) +
+  theme_math()
+```
+
+
+--------------------------------------------------------------------------------
+
+# Policy Implications
+
+The findings presented in this exploratory analysis suggest three immediate policy imperatives:
+
+1. **Mandate Transparency for Behavioral Health:** The total absence of publicly reported data for Depression Screening renders federal oversight impossible. CMS must pivot from encouraging voluntary reporting of these metrics to requiring standardized public transparency.
+2. **Standardize OUD/SUD Care:** The 0.3% to 89.6% range in OUD pharmacotherapy demonstrates that Medicaid expansion alone does not normalize care quality. States struggling at the bottom quartile require targeted federal implementation support, not just funding.
+3. **Bridge the Pediatric-Adult Care Cliff:** The systemic outperformance of child mental health follow-up compared to adults suggests that states are failing to transition Medicaid beneficiaries smoothly into adult care infrastructures. Process improvements must target the "aging out" phase to prevent abrupt drops in care quality.
+
